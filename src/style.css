@@ -1,0 +1,219 @@
+body {
+  --accent-hue: 330;
+  --accent-300: hsl(var(--accent-hue) 86% 78%);
+  --accent-400: hsl(var(--accent-hue) 86% 66%);
+  --accent-500: hsl(var(--accent-hue) 82% 55%);
+  --accent-600: hsl(var(--accent-hue) 78% 44%);
+  --accent-700: hsl(var(--accent-hue) 72% 34%);
+  --accent-ring: hsl(var(--accent-hue) 82% 55% / 0.18);
+  --accent-border: hsl(var(--accent-hue) 82% 55% / 0.44);
+  margin: 0;
+  min-height: 100vh;
+  background: linear-gradient(180deg, #020617 0%, #0f172a 100%);
+  color: #f8fafc;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 20px;
+}
+
+.logo {
+  margin: 0 0 18px;
+  color: #fdf2f8;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.logo-brand {
+  font-size: 28px;
+  font-weight: 800;
+}
+
+.logo-protocol {
+  margin-top: 5px;
+  color: var(--accent-300);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+p {
+  margin: 0 0 12px;
+  color: #cbd5e1;
+}
+
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+a {
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: rgba(15, 23, 42, 0.82);
+  color: #fce7f3;
+  text-decoration: none;
+}
+
+a:hover {
+  border-color: var(--accent-300);
+  background: hsl(var(--accent-hue) 72% 34% / 0.36);
+  color: #ffffff;
+}
+
+.context-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+input {
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: rgba(2, 6, 23, 0.92);
+  color: #f8fafc;
+  font: inherit;
+}
+
+input:focus {
+  border-color: var(--accent-400);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+  outline: none;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+section {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  padding: 16px;
+  background: rgba(15, 23, 42, 0.86);
+  box-shadow: 0 20px 48px rgba(2, 6, 23, 0.24);
+}
+
+h2 {
+  margin: 0 0 16px;
+  color: #fdf2f8;
+  font-size: 16px;
+}
+
+button {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid hsl(var(--accent-hue) 82% 55% / 0.58);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, var(--accent-600) 0%, var(--accent-700) 100%);
+  color: #ffffff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+button:hover {
+  border-color: #fce7f3;
+  background: linear-gradient(180deg, var(--accent-500) 0%, var(--accent-600) 100%);
+}
+
+.log-panel {
+  height: 360px;
+  overflow: auto;
+  border: 1px solid hsl(var(--accent-hue) 82% 55% / 0.32);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.92);
+  scrollbar-color: var(--accent-500) #020617;
+  scrollbar-width: thin;
+}
+
+.log-panel::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.log-panel::-webkit-scrollbar-track {
+  background: #020617;
+}
+
+.log-panel::-webkit-scrollbar-thumb {
+  border-radius: 8px;
+  background: var(--accent-500);
+}
+
+.log-entry {
+  overflow: hidden;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.62);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.log-summary {
+  overflow: hidden;
+  padding: 8px 10px;
+  color: #e2e8f0;
+  cursor: pointer;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.log-summary:hover,
+.log-entry.expanded .log-summary {
+  background: hsl(var(--accent-hue) 72% 34% / 0.36);
+  color: #ffffff;
+}
+
+.log-details {
+  padding: 0 10px 10px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border-top: 1px solid rgba(51, 65, 85, 0.74);
+  padding: 7px 0;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  width: 160px;
+  padding-right: 14px;
+  color: var(--accent-300);
+  font-weight: 700;
+}
+
+td {
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 720px) {
+  .context-form,
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
