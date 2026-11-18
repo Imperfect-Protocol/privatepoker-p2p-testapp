@@ -346,7 +346,7 @@ function useEventLog() {
   const eventState = React.useState([]);
   React.useEffect(() => VirtualNetworkConsoleLogger.subscribe((record) => {
     if (record.label === 'testapp.connection') return;
-    eventState[1]((events) => [new ConsoleLogRecord(record), ...events].slice(0, 300));
+    eventState[1]((events) => [new ConsoleLogRecord(record), ...events].slice(0, 10_000));
   }), []);
   const append = React.useCallback((event) => {
     VirtualNetworkConsoleLogger.log('testapp.connection', {
@@ -360,7 +360,7 @@ function useEventLog() {
       lobbyId: event.lobbyId,
       tableId: event.tableId,
     });
-    eventState[1]((events) => [new EventRecord(event), ...events].slice(0, 300));
+    eventState[1]((events) => [new EventRecord(event), ...events].slice(0, 10_000));
   }, []);
   return {
     events: eventState[0],
