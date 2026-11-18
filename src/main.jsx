@@ -470,14 +470,14 @@ function LogRow(props) {
 }
 
 function EventLogPanel(props) {
-  const messageOnlyState = React.useState(false);
+  const hideInternalState = React.useState(false);
   const copyState = React.useState('idle');
-  const messageOnly = messageOnlyState[0];
+  const hideInternal = hideInternalState[0];
   const visibleEvents = React.useMemo(
-    () => (messageOnly ? props.events.filter((record) => record.kind === 'message') : props.events),
-    [messageOnly, props.events],
+    () => (hideInternal ? props.events.filter((record) => record.kind !== 'message') : props.events),
+    [hideInternal, props.events],
   );
-  const filterLabel = messageOnly ? 'messages only' : 'all records';
+  const filterLabel = hideInternal ? 'internal messages hidden' : 'all records';
   const copyLogs = React.useCallback(async () => {
     try {
       await EventLogExporter.copy(props.context, visibleEvents, filterLabel);
@@ -503,11 +503,11 @@ function EventLogPanel(props) {
         </span>
         <button
           type="button"
-          className={messageOnly ? 'log-toggle-button active' : 'log-toggle-button'}
-          aria-pressed={messageOnly}
-          onClick={() => messageOnlyState[1](!messageOnly)}
+          className={hideInternal ? 'log-toggle-button active' : 'log-toggle-button'}
+          aria-pressed={hideInternal}
+          onClick={() => hideInternalState[1](!hideInternal)}
         >
-          Messages only
+          Hide internal
         </button>
         <button type="button" className="log-copy-button" onClick={copyLogs}>
           {copyLabel}
