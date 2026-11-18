@@ -163,6 +163,7 @@ InternalMessageSummary.RULES = {
   'tab-bus/post': (s) => `Publish ${s.fields.messageType ?? 'control'} from ${s.addr('from')} → ${s.addr('to')} to the Lobby/Table tab channel`,
   'lobby/tunnel.forward': (s) => `Tunnel ${s.fields.messageType ?? 'control'} from the Table tab → ${s.addr('peerAddress')} over the Lobby's background edge`,
   'lobby/find.gossip': (s) => `Ask the Lobby to find ${s.addr('peerAddress')} through P2P gossip first`,
+  'lobby/find.error': (s) => `Reject a table request with an empty peer address (${s.fields.reason ?? 'invalid'})`,
   'lobby/find.mesh-fallback': (s) => `Fall back to MeshServer for ${s.addr('peerAddress')} because gossip was exhausted`,
   'lobby/find.route-ready': (s) => `Lobby background route to ${s.addr('peerAddress')} is ready for the Table tab`,
   'lobby/find.route-failed': (s) => `Lobby could not establish a background route to ${s.addr('peerAddress')}`,
