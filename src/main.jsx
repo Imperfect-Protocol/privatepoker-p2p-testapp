@@ -230,15 +230,124 @@ class JsonValueFormatter {
   }
 }
 
+class BrowserClipboard {
+  static async write(text) {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return;
+      } catch {
+        // Some browsers deny the async API on non-secure origins; fall through.
+      }
+    }
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.setAttribute('readonly', '');
+    textArea.style.position = 'fixed';
+    textArea.style.opacity = '0';
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+      if (!document.execCommand('copy')) throw new Error('Clipboard copy was rejected');
+    } finally {
+      textArea.remove();
+    }
+  }
+}
+
+class EventLogExporter {
+  static text(context, records, filterLabel) {
+    const lines = [
+      `=== ${context.tabLabel.toUpperCase()} | ${context.peerLabel} | ${context.localAddress} ===`,
+      `Role: ${context.role}`,
+      `Lobby: ${context.lobbyId}`,
+      `Table: ${context.tableId}`,
+      `Context: ${context.detail}`,
+      `Filter: ${filterLabel}`,
+      `URL: ${window.location.href}`,
+      `Captured: ${new Date().toISOString()}`,
+      `Logs: ${records.length} record(s), newest first as displayed`,
+      '',
+    ];
+    records.forEach((record, index) => {
+      lines.push(`[${index + 1}] ${record.summary(context.localAddress)}`);
+      lines.push(JSON.stringify(record.details(), null, 2));
+      lines.push('');
+    });
+    return lines.join('\n');
+  }
+
+  static async copy(context, records, filterLabel) {
+    await BrowserClipboard.write(EventLogExporter.text(context, records, filterLabel));
+  }
+}
+
 class EventRecord {
   constructor(event) {
     this.id = crypto.randomUUID();
+    this.kind = 'connection';
+    this.label = 'testapp.connection';
     this.event = event;
+  }
+
+  summary(localAddress) {
+    return new VirtualNetworkLogFormatter(localAddress, this.event).text();
+  }
+
+  details() {
+    return this.event;
+  }
+}
+
+class ConsoleLogRecord {
+  constructor(record) {
+    this.id = record.id;
+    this.kind = 'message';
+    this.label = record.label;
+    this.event = record.event;
+    this.at = record.at;
+  }
+
+  summary() {
+    return `${this.label} ${JsonValueFormatter.format(this.event)}`.trim();
+  }
+
+  details() {
+    if (this.event && typeof this.event === 'object') return { label: this.label, ...this.event };
+    return { label: this.label, value: this.event };
+  }
+}
+
+class WaitingScope {
+  static from(value) {
+    return new WaitingScope({
+      peerAddress: value?.peerAddress ?? value?.from,
+      lobbyId: value?.lobbyId,
+      tableId: value?.tableId,
+    });
+  }
+
+  constructor(fields) {
+    this.peerAddress = String(fields.peerAddress ?? '').toLowerCase();
+    this.lobbyId = String(fields.lobbyId ?? '');
+    this.tableId = String(fields.tableId ?? '');
+  }
+
+  get key() {
+    return `${this.peerAddress}:${this.lobbyId}:${this.tableId}`;
+  }
+
+  matches(value) {
+    return this.key === WaitingScope.from(value).key;
   }
 }
 
 function useEventLog() {
   const eventState = React.useState([]);
+  React.useEffect(() => VirtualNetworkConsoleLogger.subscribe((record) => {
+    if (record.label === 'testapp.connection') return;
+    eventState[1]((events) => [new ConsoleLogRecord(record), ...events].slice(0, 300));
+  }), []);
   const append = React.useCallback((event) => {
     VirtualNetworkConsoleLogger.log('testapp.connection', {
       type: event.type,
@@ -333,12 +442,12 @@ function JsonFieldTable(props) {
 
 function LogRow(props) {
   const expandedState = React.useState(false);
-  const formatter = new VirtualNetworkLogFormatter(props.localAddress, props.record.event);
-  const eventJson = JSON.stringify(props.record.event, null, 2);
+  const details = props.record.details();
+  const eventJson = JSON.stringify(details, null, 2);
   const className = expandedState[0] ? 'log-entry expanded' : 'log-entry';
 
   return (
-    <div className={className}>
+    <div className={className} data-kind={props.record.kind}>
       <div
         className="log-summary"
         title={eventJson}
@@ -349,11 +458,11 @@ function LogRow(props) {
           if (event.key === 'Enter' || event.key === ' ') expandedState[1](!expandedState[0]);
         }}
       >
-        {formatter.text()}
+        {props.record.summary(props.localAddress)}
       </div>
       {expandedState[0] && (
         <div className="log-details">
-          <JsonFieldTable event={props.record.event} />
+          <JsonFieldTable event={details} />
         </div>
       )}
     </div>
@@ -361,12 +470,55 @@ function LogRow(props) {
 }
 
 function EventLogPanel(props) {
+  const messageOnlyState = React.useState(false);
+  const copyState = React.useState('idle');
+  const messageOnly = messageOnlyState[0];
+  const visibleEvents = React.useMemo(
+    () => (messageOnly ? props.events.filter((record) => record.kind === 'message') : props.events),
+    [messageOnly, props.events],
+  );
+  const filterLabel = messageOnly ? 'messages only' : 'all records';
+  const copyLogs = React.useCallback(async () => {
+    try {
+      await EventLogExporter.copy(props.context, visibleEvents, filterLabel);
+      copyState[1]('copied');
+    } catch (error) {
+      VirtualNetworkConsoleLogger.log('testapp.copy-logs.failed', {
+        error: error?.message ?? String(error),
+      });
+      copyState[1]('failed');
+    }
+  }, [props.context, visibleEvents, filterLabel]);
+  const copyLabel = copyState[0] === 'copied'
+    ? 'Copied'
+    : copyState[0] === 'failed'
+      ? 'Copy failed'
+      : 'Copy logs';
+
   return (
-    <div className="log-panel">
-      {props.events.map((record) => (
-        <LogRow key={record.id} record={record} localAddress={props.localAddress} />
-      ))}
-    </div>
+    <>
+      <div className="log-toolbar">
+        <span className="log-context">
+          {props.context.tabLabel} · {props.context.peerLabel} · {props.context.role}
+        </span>
+        <button
+          type="button"
+          className={messageOnly ? 'log-toggle-button active' : 'log-toggle-button'}
+          aria-pressed={messageOnly}
+          onClick={() => messageOnlyState[1](!messageOnly)}
+        >
+          Messages only
+        </button>
+        <button type="button" className="log-copy-button" onClick={copyLogs}>
+          {copyLabel}
+        </button>
+      </div>
+      <div className="log-panel">
+        {visibleEvents.map((record) => (
+          <LogRow key={record.id} record={record} localAddress={props.localAddress} />
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -461,10 +613,34 @@ function useLobbyRouteKeeper(fields) {
   const waitingState = React.useState(null);
   const sessionRef = React.useRef(null);
   const handlerRef = React.useRef(null);
+  const connectedScopesRef = React.useRef(new Set());
+  const dismissedScopesRef = React.useRef(new Set());
 
   handlerRef.current = (event) => {
     connection.handler(event);
-    if (event.type === 'PeerWaitRequest') waitingState[1](event);
+    const scope = WaitingScope.from(event);
+    if (event.type === 'PeerWaitRequest') {
+      if (connectedScopesRef.current.has(scope.key)) return;
+      if (dismissedScopesRef.current.has(scope.key)) return;
+      waitingState[1]((current) => (
+        current !== null && scope.matches(current) ? current : event
+      ));
+      return;
+    }
+    if (event.type === 'BackgroundRoute' && event.step === 'PreserveRouteAccepted') {
+      connectedScopesRef.current.add(scope.key);
+      dismissedScopesRef.current.delete(scope.key);
+      waitingState[1]((current) => (
+        current !== null && scope.matches(current) ? null : current
+      ));
+      return;
+    }
+    if (event.type === 'PeerWaitRejected') {
+      dismissedScopesRef.current.add(scope.key);
+      waitingState[1]((current) => (
+        current !== null && scope.matches(current) ? null : current
+      ));
+    }
   };
 
   React.useEffect(() => {
@@ -488,15 +664,32 @@ function useLobbyRouteKeeper(fields) {
       session.stop();
       if (sessionRef.current === session) sessionRef.current = null;
       waitingState[1](null);
+      connectedScopesRef.current.clear();
+      dismissedScopesRef.current.clear();
     };
   }, [fields.peerAddress, fields.lobbyId]);
+
+  const acceptWaiting = (request) => {
+    const target = request ?? waitingState[0];
+    if (target === null) return;
+    sessionRef.current?.acceptWaiting(target);
+    fields.onAcceptWaiting?.(target);
+  };
+
+  const rejectWaiting = (request) => {
+    const target = request ?? waitingState[0];
+    if (target === null) return;
+    dismissedScopesRef.current.add(WaitingScope.from(target).key);
+    sessionRef.current?.rejectWaiting(target);
+    waitingState[1](null);
+  };
 
   return {
     events: log.events,
     status: connection.status,
     waitingRequest: waitingState[0],
-    acceptWaiting: (request) => sessionRef.current?.acceptWaiting(request),
-    rejectWaiting: (request) => sessionRef.current?.rejectWaiting(request),
+    acceptWaiting,
+    rejectWaiting,
   };
 }
 
@@ -504,6 +697,7 @@ function LobbyBackgroundKeeper(props) {
   const keeper = useLobbyRouteKeeper({
     peerAddress: props.peerAddress,
     lobbyId: props.lobbyId,
+    onAcceptWaiting: props.onAcceptWaiting,
   });
 
   return (
@@ -532,7 +726,19 @@ function LobbyBackgroundKeeper(props) {
           </div>
         </div>
       )}
-      <EventLogPanel events={keeper.events} localAddress={props.peerAddress} />
+      <EventLogPanel
+        events={keeper.events}
+        localAddress={props.peerAddress}
+        context={{
+          tabLabel: 'Lobby tab',
+          peerLabel: TestPeers.label(props.peerAddress),
+          role: 'lobby',
+          localAddress: props.peerAddress,
+          lobbyId: props.lobbyId,
+          tableId: LobbyChannel.tableId,
+          detail: 'Lobby background network',
+        }}
+      />
     </section>
   );
 }
@@ -551,18 +757,36 @@ function LobbyScreen() {
     peerDialogOpenState[1](false);
   };
 
+  const openTableTab = (fields, label) => {
+    const href = url.tableHref(fields);
+    const target = [
+      'privatepoker-table',
+      TestPeers.short(fields.peerAddress).toLowerCase(),
+      String(fields.lobbyId),
+      String(fields.tableId),
+    ].join('-');
+    VirtualNetworkConsoleLogger.log(label, { href, target });
+    window.open(href, target);
+  };
+
   const joinTable = () => {
     if (!peerSelectedState[0]) {
       peerDialogOpenState[1](true);
       return;
     }
-    const href = url.tableHref({
+    openTableTab({
       peerAddress: peerAddressState[0],
       lobbyId: lobbyIdState[0],
       tableId: tableIdState[0],
-    });
-    VirtualNetworkConsoleLogger.log('testapp.table.open', { href });
-    window.open(href, '_blank');
+    }, 'testapp.table.open');
+  };
+
+  const openWaitingTable = (request) => {
+    openTableTab({
+      peerAddress: peerAddressState[0],
+      lobbyId: request.lobbyId,
+      tableId: request.tableId,
+    }, 'testapp.table.open-from-wait');
   };
 
   return (
@@ -591,6 +815,7 @@ function LobbyScreen() {
         <LobbyBackgroundKeeper
           peerAddress={peerAddressState[0]}
           lobbyId={lobbyIdState[0]}
+          onAcceptWaiting={openWaitingTable}
         />
       )}
     </>
@@ -680,7 +905,19 @@ function TableNetworkPanel(props) {
         Send Message
       </button>
       <ReceivedMessages messages={messageState[0]} />
-      <EventLogPanel events={log.events} localAddress={props.peerAddress} />
+      <EventLogPanel
+        events={log.events}
+        localAddress={props.peerAddress}
+        context={{
+          tabLabel: 'Table tab',
+          peerLabel: TestPeers.label(props.peerAddress),
+          role: 'table',
+          localAddress: props.peerAddress,
+          lobbyId: props.lobbyId,
+          tableId: props.tableId,
+          detail: `Direct P2P edge toward ${TestPeers.label(props.peerAddressToSubscribe)} (${props.peerAddressToSubscribe})`,
+        }}
+      />
     </section>
   );
 }
