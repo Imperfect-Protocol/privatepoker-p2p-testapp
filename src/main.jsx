@@ -20,6 +20,10 @@ class TestPeers {
 
   static peerBMeshUrl = 'http://127.0.0.1:3002/mesh';
 
+  static peerCAddress = '0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC';
+
+  static peerDAddress = '0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD';
+
   static peerAddress(value) {
     return String(value || TestPeers.peerAAddress);
   }
@@ -32,9 +36,19 @@ class TestPeers {
     return TestPeers.peerAddress(value).toLowerCase() === TestPeers.peerBAddress.toLowerCase();
   }
 
+  static isPeerC(value) {
+    return TestPeers.peerAddress(value).toLowerCase() === TestPeers.peerCAddress.toLowerCase();
+  }
+
+  static isPeerD(value) {
+    return TestPeers.peerAddress(value).toLowerCase() === TestPeers.peerDAddress.toLowerCase();
+  }
+
   static otherPeerAddress(value) {
     if (TestPeers.isPeerA(value)) return TestPeers.peerBAddress;
     if (TestPeers.isPeerB(value)) return TestPeers.peerAAddress;
+    if (TestPeers.isPeerC(value)) return TestPeers.peerDAddress;
+    if (TestPeers.isPeerD(value)) return TestPeers.peerCAddress;
     return TestPeers.peerBAddress;
   }
 
@@ -45,6 +59,8 @@ class TestPeers {
   static label(value) {
     if (TestPeers.isPeerA(value)) return 'Peer A';
     if (TestPeers.isPeerB(value)) return 'Peer B';
+    if (TestPeers.isPeerC(value)) return 'Peer C';
+    if (TestPeers.isPeerD(value)) return 'Peer D';
     return 'Peer';
   }
 
@@ -100,12 +116,17 @@ class TestUrl {
     return this.params.get('tableId') ?? '1';
   }
 
+  peerId() {
+    return this.params.get('peerId');
+  }
+
   tableHref(form) {
     const params = new URLSearchParams();
     params.set('screen', TestScreens.table);
     params.set('peerAddress', TestPeers.peerAddress(form.peerAddress));
     params.set('lobbyId', String(form.lobbyId || '1'));
     params.set('tableId', String(form.tableId || '1'));
+    params.set('peerId', String(form.peerId));
     return `${this.location.pathname}?${params.toString()}`;
   }
 }
@@ -245,6 +266,7 @@ function useTableP2PSession(fields) {
     TestPeers.peerAddress(fields.address).toLowerCase(),
     fields.lobbyId,
     fields.tableId,
+    fields.peerId,
   ].join(':');
 
   handlerRef.current = fields.handler;
@@ -262,6 +284,7 @@ function useTableP2PSession(fields) {
         handler: (event) => handlerRef.current(event),
         address: TestPeers.peerAddress(fields.address),
         privateKey: PrivateKeyFactory.create(),
+        peerId: fields.peerId,
         lobbyId: fields.lobbyId,
         tableId: fields.tableId,
         inboundLabel: TableChannel.inboundLabel,
@@ -497,7 +520,6 @@ function useLobbyP2PSession(fields) {
   const log = useEventLog();
   const connection = useConnectionStatus(log);
   const waitingState = React.useState(null);
-  const sessionRef = React.useRef(null);
   const handlerRef = React.useRef(null);
   const policyRef = React.useRef(null);
   if (policyRef.current === null) policyRef.current = new WaitingPromptPolicy();
@@ -509,19 +531,20 @@ function useLobbyP2PSession(fields) {
     if (decision.kind === 'clear') waitingState[1](null);
   };
 
+  const session = React.useMemo(() => new LobbyP2PSession({
+    handler: (event) => handlerRef.current(event),
+    address: fields.peerAddress,
+    privateKey: PrivateKeyFactory.create(),
+    lobbyId: fields.lobbyId,
+    backgroundTableId: TestP2P.backgroundTableId,
+    meshUrls: TestPeers.meshUrls(fields.peerAddress),
+    broadcastPrefix: TestP2P.broadcastPrefix,
+  }), [fields.peerAddress, fields.lobbyId]);
+
   React.useEffect(() => {
-    const session = new LobbyP2PSession({
-      handler: (event) => handlerRef.current(event),
-      address: fields.peerAddress,
-      privateKey: PrivateKeyFactory.create(),
-      lobbyId: fields.lobbyId,
-      backgroundTableId: TestP2P.backgroundTableId,
-      meshUrls: TestPeers.meshUrls(fields.peerAddress),
-      broadcastPrefix: TestP2P.broadcastPrefix,
-    });
-    sessionRef.current = session;
     VirtualNetworkConsoleLogger.log('testapp.lobby.session.start', {
       peerAddress: fields.peerAddress,
+      peerId: session.peerId,
       lobbyId: fields.lobbyId,
       backgroundTableId: TestP2P.backgroundTableId,
     });
@@ -529,33 +552,34 @@ function useLobbyP2PSession(fields) {
     return () => {
       VirtualNetworkConsoleLogger.log('testapp.lobby.session.stop', {
         peerAddress: fields.peerAddress,
+        peerId: session.peerId,
         lobbyId: fields.lobbyId,
       });
       session.close();
-      if (sessionRef.current === session) sessionRef.current = null;
       waitingState[1](null);
       policyRef.current.reset();
     };
-  }, [fields.peerAddress, fields.lobbyId]);
+  }, [session]);
 
   const acceptWaiting = (request) => {
     const target = request ?? waitingState[0];
     if (target === null) return;
-    sessionRef.current?.acceptWaiting(target);
-    fields.onAcceptWaiting?.(target);
+    session.acceptWaitingRequest(target);
+    fields.onAcceptWaiting?.(target, session.peerId);
   };
 
   const rejectWaiting = (request) => {
     const target = request ?? waitingState[0];
     if (target === null) return;
     policyRef.current.dismiss(WaitingScope.from(target));
-    sessionRef.current?.rejectWaiting(target);
+    session.rejectWaitingRequest(target);
     waitingState[1](null);
   };
 
   return {
     events: log.events,
     status: connection.status,
+    peerId: session.peerId,
     waitingRequest: waitingState[0],
     acceptWaiting,
     rejectWaiting,
@@ -568,6 +592,10 @@ function LobbyBackgroundKeeper(props) {
     lobbyId: props.lobbyId,
     onAcceptWaiting: props.onAcceptWaiting,
   });
+
+  React.useEffect(() => {
+    props.onPeerId?.(keeper.peerId);
+  }, [keeper.peerId, props.onPeerId]);
 
   return (
     <section className="background-panel">
@@ -619,6 +647,7 @@ function LobbyScreen() {
   const peerSelectedState = React.useState(url.params.has('peerAddress'));
   const lobbyIdState = React.useState(url.lobbyId());
   const tableIdState = React.useState(url.tableId());
+  const parentPeerIdState = React.useState(null);
 
   const confirmPeer = (peerAddress) => {
     peerAddressState[1](TestPeers.peerAddress(peerAddress));
@@ -633,6 +662,7 @@ function LobbyScreen() {
       TestPeers.short(fields.peerAddress).toLowerCase(),
       String(fields.lobbyId),
       String(fields.tableId),
+      fields.peerId,
     ].join('-');
     VirtualNetworkConsoleLogger.log(label, { href, target });
     window.open(href, target);
@@ -647,14 +677,16 @@ function LobbyScreen() {
       peerAddress: peerAddressState[0],
       lobbyId: lobbyIdState[0],
       tableId: tableIdState[0],
+      peerId: parentPeerIdState[0],
     }, 'testapp.table.open');
   };
 
-  const openWaitingTable = (request) => {
+  const openWaitingTable = (request, peerId) => {
     openTableTab({
       peerAddress: peerAddressState[0],
       lobbyId: request.lobbyId,
       tableId: request.tableId,
+      peerId,
     }, 'testapp.table.open-from-wait');
   };
 
@@ -684,6 +716,7 @@ function LobbyScreen() {
         <LobbyBackgroundKeeper
           peerAddress={peerAddressState[0]}
           lobbyId={lobbyIdState[0]}
+          onPeerId={parentPeerIdState[1]}
           onAcceptWaiting={openWaitingTable}
         />
       )}
@@ -708,6 +741,7 @@ function TableNetworkPanel(props) {
     address: props.peerAddress,
     lobbyId: props.lobbyId,
     tableId: props.tableId,
+    peerId: props.peerId,
     handler,
   });
 
@@ -794,6 +828,7 @@ function TableScreen() {
           peerAddressToSubscribe={peerAddressToSubscribe}
           lobbyId={url.lobbyId()}
           tableId={url.tableId()}
+          peerId={url.peerId()}
         />
       </div>
     </>

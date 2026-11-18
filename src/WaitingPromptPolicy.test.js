@@ -52,6 +52,21 @@ test('a repeated request id stays suppressed after Later', () => {
   assert.equal(policy.request, null);
 });
 
+test('a table connection clears the matching accepted wait', () => {
+  const policy = new WaitingPromptPolicy();
+  policy.apply(waitRequest('request-1', '151'));
+
+  const decision = policy.apply({
+    type: 'PeerWaitAccepted',
+    peerAddress: PEER_A,
+    lobbyId: '1',
+    tableId: '151',
+  });
+
+  assert.equal(decision.kind, 'clear');
+  assert.equal(policy.request, null);
+});
+
 test('a connected route only clears its own prompt', () => {
   const policy = new WaitingPromptPolicy();
 

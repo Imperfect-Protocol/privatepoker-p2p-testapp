@@ -48,6 +48,7 @@ export class WaitingPromptPolicy {
       return this.accept(scope);
     }
     if (event.type === 'PeerWaitRejected') return this.dismiss(scope);
+    if (event.type === 'PeerWaitAccepted') return this.accept(scope);
     return { kind: 'ignore' };
   }
 
