@@ -442,26 +442,37 @@ function JsonFieldTable(props) {
 }
 
 function LogRow(props) {
-  const expandedState = React.useState(false);
+  const summaryRef = React.useRef(null);
   const details = props.record.details();
   const eventJson = JSON.stringify(details, null, 2);
-  const className = expandedState[0] ? 'log-entry expanded' : 'log-entry';
+  const isExpanded = props.isExpanded;
+  const className = isExpanded ? 'log-entry expanded' : 'log-entry';
+
+  React.useEffect(() => {
+    if (!isExpanded) return;
+    const node = summaryRef.current;
+    if (!node) return;
+    node.scrollIntoView({ block: 'center', inline: 'nearest' });
+    node.focus({ preventScroll: true });
+  }, [isExpanded]);
 
   return (
     <div className={className} data-kind={props.record.kind}>
       <div
+        ref={summaryRef}
         className="log-summary"
         title={eventJson}
         role="button"
         tabIndex={0}
-        onClick={() => expandedState[1](!expandedState[0])}
+        aria-expanded={isExpanded}
+        onClick={() => props.onToggle(props.record)}
         onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') expandedState[1](!expandedState[0]);
+          if (event.key === 'Enter' || event.key === ' ') props.onToggle(props.record);
         }}
       >
         {props.record.summary(props.localAddress)}
       </div>
-      {expandedState[0] && (
+      {isExpanded && (
         <div className="log-details">
           <JsonFieldTable event={details} />
         </div>
@@ -473,7 +484,12 @@ function LogRow(props) {
 function EventLogPanel(props) {
   const hideInternalState = React.useState(false);
   const copyState = React.useState('idle');
+  const expandedState = React.useState(null);
   const hideInternal = hideInternalState[0];
+  const expandedId = expandedState[0];
+  const toggleExpanded = React.useCallback((record) => {
+    expandedState[1]((current) => (current === record.id ? null : record.id));
+  }, []);
   const visibleEvents = React.useMemo(
     () => (hideInternal ? props.events.filter((record) => record.kind !== 'message') : props.events),
     [hideInternal, props.events],
@@ -516,7 +532,13 @@ function EventLogPanel(props) {
       </div>
       <div className="log-panel">
         {visibleEvents.map((record) => (
-          <LogRow key={record.id} record={record} localAddress={props.localAddress} />
+          <LogRow
+            key={record.id}
+            record={record}
+            localAddress={props.localAddress}
+            isExpanded={record.id === expandedId}
+            onToggle={toggleExpanded}
+          />
         ))}
       </div>
     </>
