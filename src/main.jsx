@@ -10,6 +10,7 @@ import {
   VirtualNetworkLogFormatter,
 } from 'privatepoker-p2p';
 import { InternalMessageSummary } from './InternalMessageSummary.js';
+import { WaitingPromptPolicy, WaitingScope } from './WaitingPromptPolicy.js';
 import './style.css';
 
 class TestPeers {
@@ -319,30 +320,6 @@ class ConsoleLogRecord {
   }
 }
 
-class WaitingScope {
-  static from(value) {
-    return new WaitingScope({
-      peerAddress: value?.peerAddress ?? value?.from,
-      lobbyId: value?.lobbyId,
-      tableId: value?.tableId,
-    });
-  }
-
-  constructor(fields) {
-    this.peerAddress = String(fields.peerAddress ?? '').toLowerCase();
-    this.lobbyId = String(fields.lobbyId ?? '');
-    this.tableId = String(fields.tableId ?? '');
-  }
-
-  get key() {
-    return `${this.peerAddress}:${this.lobbyId}:${this.tableId}`;
-  }
-
-  matches(value) {
-    return this.key === WaitingScope.from(value).key;
-  }
-}
-
 function useEventLog() {
   const eventState = React.useState([]);
   React.useEffect(() => VirtualNetworkConsoleLogger.subscribe((record) => {
@@ -636,34 +613,14 @@ function useLobbyRouteKeeper(fields) {
   const waitingState = React.useState(null);
   const sessionRef = React.useRef(null);
   const handlerRef = React.useRef(null);
-  const connectedScopesRef = React.useRef(new Set());
-  const dismissedScopesRef = React.useRef(new Set());
+  const policyRef = React.useRef(null);
+  if (policyRef.current === null) policyRef.current = new WaitingPromptPolicy();
 
   handlerRef.current = (event) => {
     connection.handler(event);
-    const scope = WaitingScope.from(event);
-    if (event.type === 'PeerWaitRequest') {
-      if (connectedScopesRef.current.has(scope.key)) return;
-      if (dismissedScopesRef.current.has(scope.key)) return;
-      waitingState[1]((current) => (
-        current !== null && scope.matches(current) ? current : event
-      ));
-      return;
-    }
-    if (event.type === 'BackgroundRoute' && event.step === 'PreserveRouteAccepted') {
-      connectedScopesRef.current.add(scope.key);
-      dismissedScopesRef.current.delete(scope.key);
-      waitingState[1]((current) => (
-        current !== null && scope.matches(current) ? null : current
-      ));
-      return;
-    }
-    if (event.type === 'PeerWaitRejected') {
-      dismissedScopesRef.current.add(scope.key);
-      waitingState[1]((current) => (
-        current !== null && scope.matches(current) ? null : current
-      ));
-    }
+    const decision = policyRef.current.apply(event);
+    if (decision.kind === 'request') waitingState[1](decision.request);
+    if (decision.kind === 'clear') waitingState[1](null);
   };
 
   React.useEffect(() => {
@@ -687,8 +644,7 @@ function useLobbyRouteKeeper(fields) {
       session.stop();
       if (sessionRef.current === session) sessionRef.current = null;
       waitingState[1](null);
-      connectedScopesRef.current.clear();
-      dismissedScopesRef.current.clear();
+      policyRef.current.reset();
     };
   }, [fields.peerAddress, fields.lobbyId]);
 
@@ -702,7 +658,7 @@ function useLobbyRouteKeeper(fields) {
   const rejectWaiting = (request) => {
     const target = request ?? waitingState[0];
     if (target === null) return;
-    dismissedScopesRef.current.add(WaitingScope.from(target).key);
+    policyRef.current.dismiss(WaitingScope.from(target));
     sessionRef.current?.rejectWaiting(target);
     waitingState[1](null);
   };
