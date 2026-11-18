@@ -1,10 +1,8 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  LobbyRouteKeeper,
-  RouteBus,
-  RouteStore,
-  VirtualNetwork,
+  LobbyP2PSession,
+  TableP2PSession,
   VirtualNetworkConsoleLogger,
   VirtualNetworkEventType,
   VirtualNetworkLogFormatter,
@@ -40,9 +38,8 @@ class TestPeers {
     return TestPeers.peerBAddress;
   }
 
-  static meshUrls(value) {
-    if (TestPeers.isPeerB(value)) return [TestPeers.peerBMeshUrl];
-    return [TestPeers.peerAMeshUrl];
+  static meshUrls() {
+    return [TestPeers.peerAMeshUrl, TestPeers.peerBMeshUrl];
   }
 
   static label(value) {
@@ -74,17 +71,11 @@ class TableChannel {
   static outboundLabel = 'outbound';
 }
 
-/** Shared configuration for cross-tab route discovery. */
-class TestRoutes {
+/** Shared configuration for the library-owned Lobby/Table tab sessions. */
+class TestP2P {
   static broadcastPrefix = 'privatepoker-p2p-testapp';
 
   static backgroundTableId = '0';
-
-  static liveRouteTtlMs = 120_000;
-
-  static routeBusChannel = `${TestRoutes.broadcastPrefix}:routes`;
-
-  static routeStoreKey = `${TestRoutes.broadcastPrefix}:routes`;
 }
 
 class TestUrl {
@@ -122,105 +113,6 @@ class TestUrl {
 class PrivateKeyFactory {
   static create() {
     return crypto.getRandomValues(new Uint8Array(32));
-  }
-}
-
-/**
- * Keeps the lobby's background edge in step with the table tabs.
- *
- * The keeper starts idle: it only listens on the route bus until a table tab
- * announces that it has a live P2P edge. Then it subscribes on the background
- * table so the lobby keeps a route after that table tab closes.
- */
-class LobbyBackgroundSession {
-  constructor(fields) {
-    this.onEvent = fields.onEvent;
-    this.ownerAddress = TestPeers.peerAddress(fields.ownerAddress);
-    this.lobbyId = String(fields.lobbyId || '1');
-    this.waitingRequest = null;
-    this.keeper = new LobbyRouteKeeper(
-      (event) => this.handleEvent(event),
-      this.ownerAddress,
-      PrivateKeyFactory.create(),
-      {
-        lobbyId: this.lobbyId,
-        backgroundTableId: TestRoutes.backgroundTableId,
-        timeoutMs: 20_000,
-        meshUrls: TestPeers.meshUrls(this.ownerAddress),
-        broadcastPrefix: TestRoutes.broadcastPrefix,
-        role: 'lobby',
-        liveRouteTtlMs: TestRoutes.liveRouteTtlMs,
-      },
-    );
-  }
-
-  start() {
-    this.keeper.start();
-  }
-
-  stop() {
-    this.keeper.stop();
-  }
-
-  acceptWaiting(request) {
-    this.keeper.acceptWaitingRequest(request ?? this.waitingRequest);
-    this.waitingRequest = null;
-  }
-
-  rejectWaiting(request) {
-    this.keeper.rejectWaitingRequest(request ?? this.waitingRequest);
-    this.waitingRequest = null;
-  }
-
-  handleEvent(event) {
-    if (event.type === 'PeerWaitRequest') this.waitingRequest = event;
-    this.onEvent?.(event);
-  }
-}
-
-/**
- * Publishes a table's live P2P edge to the lobby and answers route questions
- * from the shared store. The table never talks to the lobby directly.
- */
-class TableRoutePublisher {
-  constructor(fields) {
-    this.ownerAddress = TestPeers.peerAddress(fields.ownerAddress);
-    this.lobbyId = String(fields.lobbyId || '1');
-    this.tableId = String(fields.tableId || '1');
-    this.bus = new RouteBus({ channelName: TestRoutes.routeBusChannel });
-    this.store = new RouteStore({
-      storageKey: TestRoutes.routeStoreKey,
-      liveRouteTtlMs: TestRoutes.liveRouteTtlMs,
-    });
-  }
-
-  routeOracle(route) {
-    return this.store.hasLivePeerRoute({
-      ownerAddress: this.ownerAddress,
-      peerAddress: route.peerAddress,
-      lobbyId: route.lobbyId,
-      backgroundTableId: TestRoutes.backgroundTableId,
-    });
-  }
-
-  handleEvent(event) {
-    if (event.type !== VirtualNetworkEventType.PEER_CONNECTED) return;
-    VirtualNetworkConsoleLogger.log('testapp.table.keep-route', {
-      ownerAddress: this.ownerAddress,
-      peerAddress: event.peerAddress,
-      lobbyId: this.lobbyId,
-      tableId: this.tableId,
-    });
-    this.bus.publishKeepRoute({
-      ownerAddress: this.ownerAddress,
-      peerAddress: event.peerAddress,
-      lobbyId: this.lobbyId,
-      tableId: this.tableId,
-    });
-  }
-
-  close() {
-    this.bus.close();
   }
 }
 
@@ -346,52 +238,45 @@ function useEventLog() {
   };
 }
 
-function useVirtualNetwork(fields) {
+function useTableP2PSession(fields) {
   const handlerRef = React.useRef(fields.handler);
-  const networkRef = React.useRef(null);
-  const networkKey = [
+  const sessionRef = React.useRef(null);
+  const sessionKey = [
     TestPeers.peerAddress(fields.address).toLowerCase(),
-    fields.role,
     fields.lobbyId,
     fields.tableId,
-    fields.name,
   ].join(':');
 
   handlerRef.current = fields.handler;
 
-  if (!networkRef.current || networkRef.current.key !== networkKey) {
-    VirtualNetworkConsoleLogger.log('testapp.network.create', {
-      key: networkKey,
+  if (!sessionRef.current || sessionRef.current.key !== sessionKey) {
+    VirtualNetworkConsoleLogger.log('testapp.table.session.create', {
+      key: sessionKey,
       address: TestPeers.peerAddress(fields.address),
-      role: fields.role,
       lobbyId: fields.lobbyId,
       tableId: fields.tableId,
-      meshUrls: TestPeers.meshUrls(fields.address),
     });
-    networkRef.current = {
-      key: networkKey,
-      network: new VirtualNetwork(
-        (event) => handlerRef.current(event),
-        TestPeers.peerAddress(fields.address),
-        PrivateKeyFactory.create(),
-        {
-          lobbyId: fields.lobbyId,
-          tableId: fields.tableId,
-          meshUrls: TestPeers.meshUrls(fields.address),
-          broadcastPrefix: TestRoutes.broadcastPrefix,
-          role: fields.role,
-          routeOracle: fields.routeOracle,
-        },
-      ),
+    sessionRef.current = {
+      key: sessionKey,
+      session: new TableP2PSession({
+        handler: (event) => handlerRef.current(event),
+        address: TestPeers.peerAddress(fields.address),
+        privateKey: PrivateKeyFactory.create(),
+        lobbyId: fields.lobbyId,
+        tableId: fields.tableId,
+        inboundLabel: TableChannel.inboundLabel,
+        outboundLabel: TableChannel.outboundLabel,
+        broadcastPrefix: TestP2P.broadcastPrefix,
+      }),
     };
   }
 
   React.useEffect(() => {
-    const created = networkRef.current;
-    return () => created?.network.close();
-  }, [networkKey]);
+    const created = sessionRef.current;
+    return () => created?.session.close();
+  }, [sessionKey]);
 
-  return networkRef.current.network;
+  return sessionRef.current.session;
 }
 
 function Logo() {
@@ -608,7 +493,7 @@ function useConnectionStatus(log) {
   };
 }
 
-function useLobbyRouteKeeper(fields) {
+function useLobbyP2PSession(fields) {
   const log = useEventLog();
   const connection = useConnectionStatus(log);
   const waitingState = React.useState(null);
@@ -625,24 +510,28 @@ function useLobbyRouteKeeper(fields) {
   };
 
   React.useEffect(() => {
-    const session = new LobbyBackgroundSession({
-      ownerAddress: fields.peerAddress,
+    const session = new LobbyP2PSession({
+      handler: (event) => handlerRef.current(event),
+      address: fields.peerAddress,
+      privateKey: PrivateKeyFactory.create(),
       lobbyId: fields.lobbyId,
-      onEvent: (event) => handlerRef.current(event),
+      backgroundTableId: TestP2P.backgroundTableId,
+      meshUrls: TestPeers.meshUrls(fields.peerAddress),
+      broadcastPrefix: TestP2P.broadcastPrefix,
     });
     sessionRef.current = session;
-    VirtualNetworkConsoleLogger.log('testapp.lobby.keeper.start', {
-      peerAddress: session.ownerAddress,
-      lobbyId: session.lobbyId,
-      backgroundTableId: TestRoutes.backgroundTableId,
+    VirtualNetworkConsoleLogger.log('testapp.lobby.session.start', {
+      peerAddress: fields.peerAddress,
+      lobbyId: fields.lobbyId,
+      backgroundTableId: TestP2P.backgroundTableId,
     });
     session.start();
     return () => {
-      VirtualNetworkConsoleLogger.log('testapp.lobby.keeper.stop', {
-        peerAddress: session.ownerAddress,
-        lobbyId: session.lobbyId,
+      VirtualNetworkConsoleLogger.log('testapp.lobby.session.stop', {
+        peerAddress: fields.peerAddress,
+        lobbyId: fields.lobbyId,
       });
-      session.stop();
+      session.close();
       if (sessionRef.current === session) sessionRef.current = null;
       waitingState[1](null);
       policyRef.current.reset();
@@ -674,7 +563,7 @@ function useLobbyRouteKeeper(fields) {
 }
 
 function LobbyBackgroundKeeper(props) {
-  const keeper = useLobbyRouteKeeper({
+  const keeper = useLobbyP2PSession({
     peerAddress: props.peerAddress,
     lobbyId: props.lobbyId,
     onAcceptWaiting: props.onAcceptWaiting,
@@ -684,9 +573,9 @@ function LobbyBackgroundKeeper(props) {
     <section className="background-panel">
       <h2>Lobby Background Network</h2>
       <p>
-        {TestPeers.label(props.peerAddress)} keeps a background P2P edge on lobby
-        channel table {LobbyChannel.tableId}, but only after a table tab reports a
-        live edge.
+        {TestPeers.label(props.peerAddress)} establishes and keeps background P2P
+        edges on lobby channel table {LobbyChannel.tableId} whenever a table tab
+        asks for a peer. Closing a table tab leaves these edges alive.
         {' '}
         Status: {keeper.status}.
       </p>
@@ -806,32 +695,21 @@ function TableNetworkPanel(props) {
   const log = useEventLog();
   const connection = useConnectionStatus(log);
   const messageState = React.useState([]);
-  const publisher = React.useMemo(() => new TableRoutePublisher({
-    ownerAddress: props.peerAddress,
-    lobbyId: props.lobbyId,
-    tableId: props.tableId,
-  }), [props.peerAddress, props.lobbyId, props.tableId]);
   const handler = React.useCallback((event) => {
     connection.handler(event);
-    publisher.handleEvent(event);
     if (event.type === VirtualNetworkEventType.MESSAGE_RECEIVED) {
       messageState[1]((messages) => [{
         id: crypto.randomUUID(),
         text: JsonValueFormatter.format(event.messageData?.text ?? event.messageData),
       }, ...messages].slice(0, 20));
     }
-  }, [connection.handler, publisher]);
-  const network = useVirtualNetwork({
-    name: 'table',
-    role: 'table',
+  }, [connection.handler]);
+  const session = useTableP2PSession({
     address: props.peerAddress,
     lobbyId: props.lobbyId,
     tableId: props.tableId,
     handler,
-    routeOracle: (route) => publisher.routeOracle(route),
   });
-
-  React.useEffect(() => () => publisher.close(), [publisher]);
 
   const subscribe = React.useCallback(() => {
     VirtualNetworkConsoleLogger.log('testapp.table.subscribe', {
@@ -840,20 +718,17 @@ function TableNetworkPanel(props) {
       lobbyId: props.lobbyId,
       tableId: props.tableId,
     });
-    network.subscribe(
-      TableChannel.inboundLabel,
-      TableChannel.outboundLabel,
+    session.subscribe(
       props.peerAddressToSubscribe,
-      20_000,
       props.lobbyId,
       props.tableId,
     );
-  }, [network, props.peerAddress, props.peerAddressToSubscribe, props.lobbyId, props.tableId]);
+  }, [session, props.peerAddress, props.peerAddressToSubscribe, props.lobbyId, props.tableId]);
 
   React.useEffect(() => {
     subscribe();
-    return () => network.unsubscribe(TableChannel.inboundLabel);
-  }, [network, subscribe]);
+    return () => session.unsubscribe();
+  }, [session, subscribe]);
 
   const sendMessage = () => {
     VirtualNetworkConsoleLogger.log('testapp.table.send', {
@@ -862,7 +737,7 @@ function TableNetworkPanel(props) {
       lobbyId: props.lobbyId,
       tableId: props.tableId,
     });
-    network.send(TableChannel.outboundLabel, {
+    session.send({
       text: `hello from ${TestPeers.label(props.peerAddress)}`,
       lobbyId: props.lobbyId,
       tableId: props.tableId,

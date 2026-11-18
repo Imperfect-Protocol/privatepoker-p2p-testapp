@@ -5,7 +5,7 @@
  * answer "why did this message happen?" without reading the JSON payload.
  */
 export class InternalMessageSummary {
-  static PREFIXES = ['neural.routing.', 'neural.', 'control-bus.', 'route-bus.', 'testapp.'];
+  static PREFIXES = ['neural.routing.', 'neural.', 'tab-bus.', 'lobby.', 'testapp.'];
 
   static short(value) {
     const text = String(value ?? '');
@@ -157,23 +157,23 @@ InternalMessageSummary.RULES = {
   'neural/fallback.known-route': (s) => `Skip mesh fallback for ${s.addr('peerAddress')}: a live lobby route already exists`,
   'neural/fallback.request': (s) => `Ask mesh to reconnect ${s.addr('peerAddress')}: neural retries were exhausted`,
   'neural/transport.receive': (s) => `Neural bundle from ${s.addr('sender')} accepted: ${s.num('signals')} signal(s) to learn and merge`,
-  'control-bus/broadcast.ready': () => 'Open BroadcastChannel so sibling tabs share control messages',
-  'control-bus/worker.connecting': () => 'Open SharedWorker as a second control path between tabs',
-  'control-bus/worker.unavailable': () => 'SharedWorker unavailable; sibling tabs keep using BroadcastChannel',
-  'control-bus/worker.ready': (s) => `SharedWorker ready on port ${s.num('portId')}`,
-  'control-bus/worker.recv': (s) => `${s.fields.messageType ?? 'control'} from ${s.addr('from')} → ${s.addr('to')} arrived through SharedWorker`,
-  'control-bus/session.register': (s) => `Register ${s.sessionLabel()} (${s.fields.role ?? 'peer'}) with the control bus`,
-  'control-bus/session.unregister': (s) => `Unregister ${s.sessionLabel()} (${s.fields.role ?? 'peer'}) from the control bus`,
-  'control-bus/presence.register': (s) => `Register lobby presence ${s.sessionLabel()} with the control bus`,
-  'control-bus/presence.unregister': (s) => `Unregister lobby presence ${s.sessionLabel()} from the control bus`,
-  'control-bus/post': (s) => `Publish ${s.fields.messageType ?? 'control'} from ${s.addr('from')} → ${s.addr('to')} to sibling tabs`,
-  'route-bus/publish': (s) => `Publish ${s.payload().trim() || 'route'} evidence to sibling tabs for table ${s.num('tableId')}`,
-  'route-bus/recv': (s) => `Sibling tab published ${s.payload().trim() || 'route'} evidence for table ${s.num('tableId')}`,
-  'testapp/network.create': (s) => `Create ${s.fields.role ?? 'peer'} VirtualNetwork for ${s.addr('address')} (lobby ${s.num('lobbyId')}, table ${s.num('tableId')})`,
-  'testapp/lobby.keeper.start': () => 'Lobby route keeper starts idle; it publishes keep-route only after a table owns an edge',
-  'testapp/lobby.keeper.stop': () => 'Stop the lobby route keeper',
-  'testapp/table.open': () => 'Open a table tab for the first mesh join',
-  'testapp/table.open-from-wait': () => 'Open the waiting table tab through the live P2P route',
+  'tab-bus/broadcast.ready': () => 'Open BroadcastChannel so the Lobby and Table tabs exchange messages',
+  'tab-bus/session.register': (s) => `Register ${s.sessionLabel()} (${s.fields.role ?? 'peer'}) in this tab's control bus`,
+  'tab-bus/session.unregister': (s) => `Unregister ${s.sessionLabel()} (${s.fields.role ?? 'peer'}) from this tab's control bus`,
+  'tab-bus/post': (s) => `Publish ${s.fields.messageType ?? 'control'} from ${s.addr('from')} → ${s.addr('to')} to the Lobby/Table tab channel`,
+  'lobby/tunnel.forward': (s) => `Tunnel ${s.fields.messageType ?? 'control'} from the Table tab → ${s.addr('peerAddress')} over the Lobby's background edge`,
+  'lobby/find.gossip': (s) => `Ask the Lobby to find ${s.addr('peerAddress')} through P2P gossip first`,
+  'lobby/find.mesh-fallback': (s) => `Fall back to MeshServer for ${s.addr('peerAddress')} because gossip was exhausted`,
+  'lobby/find.route-ready': (s) => `Lobby background route to ${s.addr('peerAddress')} is ready for the Table tab`,
+  'lobby/find.route-failed': (s) => `Lobby could not establish a background route to ${s.addr('peerAddress')}`,
+  'lobby/route.request': (s) => `Table tab asks its Lobby for a background route to ${s.addr('peerAddress')}`,
+  'lobby/route.ready': (s) => `Lobby answered with a live background route to ${s.addr('peerAddress')}`,
+  'lobby/route.failed': (s) => `Table tab was told that no Lobby background route exists to ${s.addr('peerAddress')}`,
+  'testapp/table.session.create': (s) => `Create the Table tab session for lobby ${s.num('lobbyId')}, table ${s.num('tableId')}`,
+  'testapp/lobby.session.start': () => 'Lobby tab starts idle; it connects only when a Table tab asks for a peer',
+  'testapp/lobby.session.stop': () => 'Lobby tab closes and drops all in-memory background state',
+  'testapp/table.open': () => 'Open a table tab that asks its Lobby for the first peer route',
+  'testapp/table.open-from-wait': () => 'Open the waiting table tab through the live Lobby background route',
   'testapp/table.subscribe': (s) => `Ask the protocol to establish the table channel toward ${s.addr('peerAddressToSubscribe')}`,
   'testapp/table.send': () => 'Send a test chat message through the table channel',
   'testapp/copy-logs.failed': (s) => `Clipboard copy failed: ${s.error()}`,
