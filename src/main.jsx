@@ -458,8 +458,10 @@ function LogRow(props) {
   );
 }
 
+const ALL_RECORDS_FILTER_LABEL = 'all records (including internal messages)';
+
 function EventLogPanel(props) {
-  const hideInternalState = React.useState(false);
+  const hideInternalState = React.useState(true);
   const copyState = React.useState('idle');
   const expandedState = React.useState(null);
   const hideInternal = hideInternalState[0];
@@ -471,10 +473,9 @@ function EventLogPanel(props) {
     () => (hideInternal ? props.events.filter((record) => record.kind !== 'message') : props.events),
     [hideInternal, props.events],
   );
-  const filterLabel = hideInternal ? 'internal messages hidden' : 'all records';
   const copyLogs = React.useCallback(async () => {
     try {
-      await EventLogExporter.copy(props.context, visibleEvents, filterLabel);
+      await EventLogExporter.copy(props.context, props.events, ALL_RECORDS_FILTER_LABEL);
       copyState[1]('copied');
     } catch (error) {
       VirtualNetworkConsoleLogger.log('testapp.copy-logs.failed', {
@@ -482,7 +483,7 @@ function EventLogPanel(props) {
       });
       copyState[1]('failed');
     }
-  }, [props.context, visibleEvents, filterLabel]);
+  }, [props.context, props.events]);
   const copyLabel = copyState[0] === 'copied'
     ? 'Copied'
     : copyState[0] === 'failed'
