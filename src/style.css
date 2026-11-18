@@ -208,6 +208,28 @@ button:hover {
   background: linear-gradient(180deg, var(--accent-500) 0%, var(--accent-600) 100%);
 }
 
+.received-messages {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.received-message {
+  padding: 8px 10px;
+  border: 1px solid hsl(var(--accent-hue) 82% 55% / 0.32);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.92);
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.received-empty {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
 .log-panel {
   height: 360px;
   margin-top: 14px;

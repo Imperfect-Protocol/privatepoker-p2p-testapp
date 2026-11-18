@@ -1,6 +1,11 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { VirtualNetwork, VirtualNetworkConsoleLogger, VirtualNetworkLogFormatter } from 'privatepoker-p2p';
+import {
+  VirtualNetwork,
+  VirtualNetworkConsoleLogger,
+  VirtualNetworkEventType,
+  VirtualNetworkLogFormatter,
+} from 'privatepoker-p2p';
 import './style.css';
 
 class TestPeers {
@@ -52,8 +57,20 @@ class TestScreens {
   static table = 'table';
 }
 
+/** The lobby channel keeps a background P2P edge alive on table 0. */
 class LobbyChannel {
   static tableId = '0';
+
+  static inboundLabel = 'lobby-inbound';
+
+  static outboundLabel = 'lobby-outbound';
+}
+
+/** One table tab owns exactly one direct subscription. */
+class TableChannel {
+  static inboundLabel = 'inbound';
+
+  static outboundLabel = 'outbound';
 }
 
 class TestUrl {
@@ -94,83 +111,6 @@ class PrivateKeyFactory {
   }
 }
 
-class RouteKey {
-  constructor(fields) {
-    this.ownerAddress = TestPeers.peerAddress(fields.ownerAddress).toLowerCase();
-    this.peerAddress = TestPeers.peerAddress(fields.peerAddress).toLowerCase();
-    this.lobbyId = String(fields.lobbyId || '1');
-    this.tableId = String(fields.tableId || '1');
-  }
-
-  toString() {
-    return [
-      this.ownerAddress,
-      this.peerAddress,
-      this.lobbyId,
-      this.tableId,
-    ].join(':');
-  }
-}
-
-class BackgroundRouteStore {
-  static storageKey = 'privatepoker-p2p-testapp:routes';
-
-  static routeTtlMs = 15 * 60 * 1000;
-
-  static read() {
-    try {
-      return JSON.parse(localStorage.getItem(BackgroundRouteStore.storageKey) || '{}');
-    } catch {
-      return {};
-    }
-  }
-
-  static write(records) {
-    localStorage.setItem(BackgroundRouteStore.storageKey, JSON.stringify(records));
-  }
-
-  static remember(fields) {
-    const records = BackgroundRouteStore.read();
-    const routeKey = new RouteKey(fields).toString();
-    records[routeKey] = Date.now();
-    BackgroundRouteStore.write(records);
-  }
-
-  static has(fields) {
-    const records = BackgroundRouteStore.read();
-    const routeKey = new RouteKey(fields).toString();
-    const timestamp = Number(records[routeKey] || 0);
-    return timestamp > 0 && Date.now() - timestamp < BackgroundRouteStore.routeTtlMs;
-  }
-}
-
-class BackgroundRouteBus {
-  constructor() {
-    this.channel = new BroadcastChannel('privatepoker-p2p-testapp:background-routes');
-  }
-
-  publish(type, fields) {
-    const message = {
-      ...fields,
-      type,
-      sentAt: Date.now(),
-    };
-    VirtualNetworkConsoleLogger.log('testapp.background-route.publish', message);
-    this.channel.postMessage(message);
-  }
-
-  listen(callback) {
-    this.channel.onmessage = (event) => {
-      VirtualNetworkConsoleLogger.log('testapp.background-route.recv', event.data);
-      callback(event.data);
-    };
-  }
-
-  close() {
-    this.channel.close();
-  }
-}
-
 class JsonValueFormatter {
   static format(value) {
     if (value instanceof Error) return value.message;
@@ -200,19 +140,26 @@ function useEventLog() {
 
 function useVirtualNetwork(fields) {
   const handlerRef = React.useRef(fields.handler);
-  const routeOracleRef = React.useRef(fields.routeOracle);
   const networkRef = React.useRef(null);
   const networkKey = [
     TestPeers.peerAddress(fields.address).toLowerCase(),
+    fields.role,
     fields.lobbyId,
     fields.tableId,
     fields.name,
   ].join(':');
 
   handlerRef.current = fields.handler;
-  routeOracleRef.current = fields.routeOracle;
 
   if (!networkRef.current || networkRef.current.key !== networkKey) {
+    VirtualNetworkConsoleLogger.log('testapp.network.create', {
+      key: networkKey,
+      address: TestPeers.peerAddress(fields.address),
+      role: fields.role,
+      lobbyId: fields.lobbyId,
+      tableId: fields.tableId,
+      meshUrls: TestPeers.meshUrls(fields.address),
+    });
     networkRef.current = {
       key: networkKey,
       network: new VirtualNetwork(
@@ -225,11 +172,15 @@ function useVirtualNetwork(fields) {
           meshUrls: TestPeers.meshUrls(fields.address),
           broadcastPrefix: 'privatepoker-p2p-testapp',
           role: fields.role,
-          routeOracle: (route) => routeOracleRef.current?.(route),
         },
       ),
     };
   }
+
+  React.useEffect(() => {
+    const created = networkRef.current;
+    return () => created?.network.close();
+  }, [networkKey]);
 
   return networkRef.current.network;
 }
@@ -297,6 +248,18 @@ function EventLogPanel(props) {
   );
 }
 
+function ReceivedMessages(props) {
+  return (
+    <div className="received-messages">
+      {props.messages.length === 0
+        ? <p className="received-empty">No messages received.</p>
+        : props.messages.map((message) => (
+          <div className="received-message" key={message.id}>{message.text}</div>
+        ))}
+    </div>
+  );
+}
+
 function Field(props) {
   return (
     <label>
@@ -354,83 +317,62 @@ function PeerSelectionDialog(props) {
   );
 }
 
-function LobbyBackgroundNetwork(props) {
-  const log = useEventLog();
-  const connectedRef = React.useRef(false);
-  const preservedRouteRef = React.useRef(null);
-  const keepRouteRef = React.useRef(false);
+function useConnectionStatus(log) {
+  const statusState = React.useState('idle');
   const handler = React.useCallback((event) => {
     log.append(event);
-    if (event.type === 'PeerConnected') {
-      connectedRef.current = true;
-      if (keepRouteRef.current && preservedRouteRef.current) {
-        BackgroundRouteStore.remember(preservedRouteRef.current);
-      }
-    }
-    if (event.type === 'PeerDisconnected') connectedRef.current = false;
-  }, [props.peerAddress, props.peerAddressToSubscribe, props.lobbyId, props.tableId]);
+    if (event.type === VirtualNetworkEventType.PEER_CONNECTED) statusState[1]('connected');
+    if (event.type === VirtualNetworkEventType.PEER_DISCONNECTED) statusState[1]('disconnected');
+    if (event.type === VirtualNetworkEventType.CONNECTION_TIMEOUT) statusState[1]('timeout');
+    if (event.type === VirtualNetworkEventType.CONNECTION_FAILED) statusState[1]('failed');
+    if (event.type === VirtualNetworkEventType.PEER_WAITING) statusState[1]('waiting');
+  }, [log.append]);
+  return {
+    status: statusState[0],
+    handler,
+  };
+}
+
+function LobbyBackgroundNetwork(props) {
+  const log = useEventLog();
+  const connection = useConnectionStatus(log);
   const network = useVirtualNetwork({
     name: 'lobby',
     role: 'lobby',
     address: props.peerAddress,
     lobbyId: props.lobbyId,
     tableId: LobbyChannel.tableId,
-    handler,
-    routeOracle: (route) => (
-      keepRouteRef.current
-      && TestPeers.peerAddress(route.peerAddress).toLowerCase() === TestPeers.peerAddress(props.peerAddressToSubscribe).toLowerCase()
-      && String(route.lobbyId) === String(props.lobbyId)
-      && String(route.tableId) === LobbyChannel.tableId
-    ),
+    handler: connection.handler,
   });
 
   React.useEffect(() => {
-    const bus = new BackgroundRouteBus();
-    const ensureBackgroundSubscription = () => {
-      network.subscribe(
-        'lobby-inbound',
-        'lobby-outbound',
-        props.peerAddressToSubscribe,
-        10_000,
-        props.lobbyId,
-        LobbyChannel.tableId,
-      );
-    };
-
-    bus.listen((message) => {
-      if (message.type !== 'keep-route') return;
-      if (TestPeers.peerAddress(message.ownerAddress).toLowerCase() !== TestPeers.peerAddress(props.peerAddress).toLowerCase()) return;
-      if (String(message.lobbyId) !== String(props.lobbyId)) return;
-      if (String(message.tableId) !== String(props.tableId)) return;
-
-      keepRouteRef.current = true;
-      preservedRouteRef.current = message;
-      log.append({
-        type: 'BackgroundRoute',
-        step: 'PreserveRouteAccepted',
-        ownerAddress: message.ownerAddress,
-        peerAddress: message.peerAddress,
-        lobbyId: message.lobbyId,
-        tableId: message.tableId,
-        backgroundTableId: LobbyChannel.tableId,
-      });
-      ensureBackgroundSubscription();
-      if (connectedRef.current) {
-        BackgroundRouteStore.remember(preservedRouteRef.current);
-        bus.publish('route-available', message);
-      }
+    VirtualNetworkConsoleLogger.log('testapp.lobby.subscribe', {
+      peerAddress: props.peerAddress,
+      peerAddressToSubscribe: props.peerAddressToSubscribe,
+      lobbyId: props.lobbyId,
+      tableId: LobbyChannel.tableId,
     });
-
-    return () => {
-      network.unsubscribe('lobby-inbound');
-      bus.close();
-    };
-  }, [network, props.peerAddress, props.peerAddressToSubscribe, props.lobbyId, props.tableId]);
+    network.subscribe(
+      LobbyChannel.inboundLabel,
+      LobbyChannel.outboundLabel,
+      props.peerAddressToSubscribe,
+      20_000,
+      props.lobbyId,
+      LobbyChannel.tableId,
+    );
+    return () => network.unsubscribe(LobbyChannel.inboundLabel);
+  }, [network, props.peerAddress, props.peerAddressToSubscribe, props.lobbyId]);
 
   return (
     <section className="background-panel">
       <h2>Lobby Background Network</h2>
-      <p>{TestPeers.label(props.peerAddress)} is ready to preserve table routes to {TestPeers.short(props.peerAddressToSubscribe)} on lobby channel table 0.</p>
+      <p>
+        {TestPeers.label(props.peerAddress)} keeps a background P2P edge to
+        {' '}
+        {TestPeers.short(props.peerAddressToSubscribe)} on lobby channel table {LobbyChannel.tableId}.
+        {' '}
+        Status: {connection.status}.
+      </p>
       <EventLogPanel events={log.events} localAddress={props.peerAddress} />
     </section>
   );
@@ -461,6 +403,7 @@ function LobbyScreen() {
       lobbyId: lobbyIdState[0],
       tableId: tableIdState[0],
     });
+    VirtualNetworkConsoleLogger.log('testapp.table.open', { href });
     window.open(href, '_blank');
   };
 
@@ -491,7 +434,6 @@ function LobbyScreen() {
           peerAddress={peerAddressState[0]}
           peerAddressToSubscribe={peerAddressToSubscribe}
           lobbyId={lobbyIdState[0]}
-          tableId={tableIdState[0]}
         />
       )}
     </>
@@ -500,37 +442,17 @@ function LobbyScreen() {
 
 function TableNetworkPanel(props) {
   const log = useEventLog();
-  const routeAvailableState = React.useState(BackgroundRouteStore.has({
-    ownerAddress: props.peerAddress,
-    peerAddress: props.peerAddressToSubscribe,
-    lobbyId: props.lobbyId,
-    tableId: props.tableId,
-  }));
-  const busRef = React.useRef(null);
-  const routeOracle = React.useCallback(() => BackgroundRouteStore.has({
-    ownerAddress: props.peerAddress,
-    peerAddress: props.peerAddressToSubscribe,
-    lobbyId: props.lobbyId,
-    tableId: props.tableId,
-  }), [props.peerAddress, props.peerAddressToSubscribe, props.lobbyId, props.tableId]);
+  const connection = useConnectionStatus(log);
+  const messageState = React.useState([]);
   const handler = React.useCallback((event) => {
-    log.append(event);
-    if (event.type !== 'PeerConnected') return;
-    log.append({
-      type: 'BackgroundRoute',
-      step: 'PreserveRouteRequested',
-      ownerAddress: props.peerAddress,
-      peerAddress: props.peerAddressToSubscribe,
-      lobbyId: props.lobbyId,
-      tableId: props.tableId,
-    });
-    busRef.current?.publish('keep-route', {
-      ownerAddress: props.peerAddress,
-      peerAddress: props.peerAddressToSubscribe,
-      lobbyId: props.lobbyId,
-      tableId: props.tableId,
-    });
-  }, [props.peerAddress, props.peerAddressToSubscribe, props.lobbyId, props.tableId]);
+    connection.handler(event);
+    if (event.type === VirtualNetworkEventType.MESSAGE_RECEIVED) {
+      messageState[1]((messages) => [{
+        id: crypto.randomUUID(),
+        text: JsonValueFormatter.format(event.messageData?.text ?? event.messageData),
+      }, ...messages].slice(0, 20));
+    }
+  }, [connection.handler]);
   const network = useVirtualNetwork({
     name: 'table',
     role: 'table',
@@ -538,46 +460,60 @@ function TableNetworkPanel(props) {
     lobbyId: props.lobbyId,
     tableId: props.tableId,
     handler,
-    routeOracle,
   });
 
-  React.useEffect(() => {
-    const bus = new BackgroundRouteBus();
-    busRef.current = bus;
-    bus.listen((message) => {
-      if (message.type !== 'route-available') return;
-      if (TestPeers.peerAddress(message.ownerAddress).toLowerCase() !== TestPeers.peerAddress(props.peerAddress).toLowerCase()) return;
-      if (TestPeers.peerAddress(message.peerAddress).toLowerCase() !== TestPeers.peerAddress(props.peerAddressToSubscribe).toLowerCase()) return;
-      if (String(message.lobbyId) !== String(props.lobbyId)) return;
-      if (String(message.tableId) !== String(props.tableId)) return;
-      routeAvailableState[1](true);
+  const subscribe = React.useCallback(() => {
+    VirtualNetworkConsoleLogger.log('testapp.table.subscribe', {
+      peerAddress: props.peerAddress,
+      peerAddressToSubscribe: props.peerAddressToSubscribe,
+      lobbyId: props.lobbyId,
+      tableId: props.tableId,
     });
-    return () => {
-      busRef.current = null;
-      network.unsubscribe('inbound');
-      bus.close();
-    };
+    network.subscribe(
+      TableChannel.inboundLabel,
+      TableChannel.outboundLabel,
+      props.peerAddressToSubscribe,
+      20_000,
+      props.lobbyId,
+      props.tableId,
+    );
   }, [network, props.peerAddress, props.peerAddressToSubscribe, props.lobbyId, props.tableId]);
+
+  React.useEffect(() => {
+    subscribe();
+    return () => network.unsubscribe(TableChannel.inboundLabel);
+  }, [network, subscribe]);
+
+  const sendMessage = () => {
+    VirtualNetworkConsoleLogger.log('testapp.table.send', {
+      peerAddress: props.peerAddress,
+      peerAddressToSubscribe: props.peerAddressToSubscribe,
+      lobbyId: props.lobbyId,
+      tableId: props.tableId,
+    });
+    network.send(TableChannel.outboundLabel, {
+      text: `hello from ${TestPeers.label(props.peerAddress)}`,
+      lobbyId: props.lobbyId,
+      tableId: props.tableId,
+      sentAt: Date.now(),
+    });
+  };
 
   return (
     <section>
       <h2>{TestPeers.label(props.peerAddress)}: {TestPeers.short(props.peerAddress)}</h2>
-      <p>Lobby {props.lobbyId}, table {props.tableId}. Background P2P route: {routeAvailableState[0] ? 'available' : 'not learned yet'}.</p>
-      <button
-        type="button"
-        onClick={() => network.subscribe('inbound', 'outbound', props.peerAddressToSubscribe, 10_000, props.lobbyId, props.tableId)}
-      >
-        Subscribe to {TestPeers.short(props.peerAddressToSubscribe)}
+      <p>
+        Lobby {props.lobbyId}, table {props.tableId}.
+        {' '}
+        Direct P2P edge to {TestPeers.short(props.peerAddressToSubscribe)}: {connection.status}.
+      </p>
+      <button type="button" onClick={subscribe}>
+        Reconnect to {TestPeers.short(props.peerAddressToSubscribe)}
       </button>
-      <button
-        type="button"
-        onClick={() => network.send('outbound', {
-          text: `hello from ${TestPeers.label(props.peerAddress)}`,
-          sentAt: Date.now(),
-        })}
-      >
+      <button type="button" onClick={sendMessage}>
         Send Message
       </button>
+      <ReceivedMessages messages={messageState[0]} />
       <EventLogPanel events={log.events} localAddress={props.peerAddress} />
     </section>
   );
