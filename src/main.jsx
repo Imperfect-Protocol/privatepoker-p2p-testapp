@@ -12,6 +12,8 @@ import { WaitingPromptPolicy, WaitingScope } from './WaitingPromptPolicy.js';
 import './style.css';
 
 class TestPeers {
+  static choices = ['A', 'B', 'C', 'D'];
+
   static peerAAddress = '0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
   static peerBAddress = '0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
@@ -26,6 +28,18 @@ class TestPeers {
 
   static peerAddress(value) {
     return String(value || TestPeers.peerAAddress);
+  }
+
+  static isSame(first, second) {
+    return TestPeers.peerAddress(first).toLowerCase() === TestPeers.peerAddress(second).toLowerCase();
+  }
+
+  static addressForChoice(choice) {
+    return TestPeers[`peer${choice}Address`] ?? TestPeers.peerAAddress;
+  }
+
+  static choiceLabel(choice) {
+    return `Peer ${choice}`;
   }
 
   static isPeerA(value) {
@@ -70,6 +84,8 @@ class TestPeers {
 }
 
 class TestScreens {
+  static start = 'start';
+
   static lobby = 'lobby';
 
   static table = 'table';
@@ -101,11 +117,25 @@ class TestUrl {
   }
 
   screen() {
-    return this.params.get('screen') ?? TestScreens.lobby;
+    const screen = this.params.get('screen');
+    if (screen) return screen;
+    return this.params.has('peerAddress') ? TestScreens.lobby : TestScreens.start;
   }
 
   peerAddress() {
     return this.params.get('peerAddress') ?? TestPeers.peerAAddress;
+  }
+
+  peerAddressToSubscribe() {
+    return this.params.get('peerAddressToSubscribe');
+  }
+
+  lobbyHref(peerAddress) {
+    const params = new URLSearchParams();
+    params.set('screen', TestScreens.lobby);
+    params.set('peerAddress', TestPeers.peerAddress(peerAddress));
+    params.set('lobbyId', this.lobbyId());
+    return `${this.location.pathname}?${params.toString()}`;
   }
 
   lobbyId() {
@@ -124,6 +154,7 @@ class TestUrl {
     const params = new URLSearchParams();
     params.set('screen', TestScreens.table);
     params.set('peerAddress', TestPeers.peerAddress(form.peerAddress));
+    params.set('peerAddressToSubscribe', TestPeers.peerAddress(form.peerAddressToSubscribe));
     params.set('lobbyId', String(form.lobbyId || '1'));
     params.set('tableId', String(form.tableId || '1'));
     params.set('peerId', String(form.peerId));
@@ -457,45 +488,75 @@ function Field(props) {
   );
 }
 
-function PeerAddressField(props) {
+function StartScreen() {
+  const url = new TestUrl(window.location);
+  const customAddressState = React.useState('');
+
+  const goToLobby = (peerAddress) => {
+    window.location.href = url.lobbyHref(peerAddress);
+  };
+
   return (
-    <div className="peer-selector">
-      <Field label="Peer address" value={props.peerAddress} readOnly onChange={() => {}} />
-      <button type="button" onClick={props.onChoosePeer}>
-        Choose Peer
-      </button>
-    </div>
+    <>
+      <Logo />
+      <section>
+        <h2>Choose Current Peer</h2>
+        <div className="start-peer-grid">
+          {TestPeers.choices.map((choice) => (
+            <button
+              type="button"
+              key={choice}
+              onClick={() => goToLobby(TestPeers.addressForChoice(choice))}
+            >
+              {TestPeers.choiceLabel(choice)}
+            </button>
+          ))}
+        </div>
+        <form
+          className="custom-peer-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const peerAddress = customAddressState[0].trim();
+            if (peerAddress) goToLobby(peerAddress);
+          }}
+        >
+          <input
+            type="text"
+            aria-label="Custom peer address"
+            placeholder="0x012345678..."
+            value={customAddressState[0]}
+            onChange={(event) => customAddressState[1](event.target.value)}
+          />
+          <button type="submit" disabled={customAddressState[0].trim().length === 0}>
+            Ok
+          </button>
+        </form>
+      </section>
+    </>
   );
 }
 
-function PeerSelectionDialog(props) {
-  const draftState = React.useState(props.peerAddress);
-
-  React.useEffect(() => {
-    draftState[1](props.peerAddress);
-  }, [props.peerAddress]);
-
-  if (!props.open) return null;
-
+function TargetPeerSelector(props) {
   return (
-    <div className="modal-backdrop">
-      <section className="peer-dialog" role="dialog" aria-modal="true" aria-labelledby="peer-dialog-title">
-        <h2 id="peer-dialog-title">Select Peer</h2>
-        <Field label="Peer Address" value={draftState[0]} onChange={draftState[1]} />
-        <div className="dialog-button-row">
-          <button type="button" onClick={() => draftState[1](TestPeers.peerAAddress)}>
-            Peer A
-          </button>
-          <button type="button" onClick={() => draftState[1](TestPeers.peerBAddress)}>
-            Peer B
-          </button>
-        </div>
-        <div className="dialog-actions">
-          <button type="button" onClick={() => props.onConfirm(draftState[0])}>
-            OK
-          </button>
-        </div>
-      </section>
+    <div className="target-peer-selector">
+      <Field label="Other Peer" value={props.peerAddress} onChange={props.onChange} />
+      <div className="peer-choice-row">
+        {TestPeers.choices.map((choice) => {
+          const peerAddress = TestPeers.addressForChoice(choice);
+          const isCurrentPeer = TestPeers.isSame(peerAddress, props.currentPeerAddress);
+          return (
+            <button
+              type="button"
+              key={choice}
+              className={`peer-choice${TestPeers.isSame(peerAddress, props.peerAddress) ? ' active' : ''}`}
+              disabled={isCurrentPeer}
+              onClick={() => props.onChange(peerAddress)}
+            >
+              {TestPeers.choiceLabel(choice)}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -642,24 +703,18 @@ function LobbyBackgroundKeeper(props) {
 
 function LobbyScreen() {
   const url = new TestUrl(window.location);
-  const peerAddressState = React.useState(url.peerAddress());
-  const peerDialogOpenState = React.useState(!url.params.has('peerAddress'));
-  const peerSelectedState = React.useState(url.params.has('peerAddress'));
+  const currentPeerAddress = TestPeers.peerAddress(url.peerAddress());
+  const targetPeerAddressState = React.useState(TestPeers.otherPeerAddress(currentPeerAddress));
   const lobbyIdState = React.useState(url.lobbyId());
   const tableIdState = React.useState(url.tableId());
   const parentPeerIdState = React.useState(null);
-
-  const confirmPeer = (peerAddress) => {
-    peerAddressState[1](TestPeers.peerAddress(peerAddress));
-    peerSelectedState[1](true);
-    peerDialogOpenState[1](false);
-  };
 
   const openTableTab = (fields, label) => {
     const href = url.tableHref(fields);
     const target = [
       'privatepoker-table',
       TestPeers.short(fields.peerAddress).toLowerCase(),
+      TestPeers.short(fields.peerAddressToSubscribe).toLowerCase(),
       String(fields.lobbyId),
       String(fields.tableId),
       fields.peerId,
@@ -669,12 +724,10 @@ function LobbyScreen() {
   };
 
   const joinTable = () => {
-    if (!peerSelectedState[0]) {
-      peerDialogOpenState[1](true);
-      return;
-    }
+    if (TestPeers.isSame(targetPeerAddressState[0], currentPeerAddress)) return;
     openTableTab({
-      peerAddress: peerAddressState[0],
+      peerAddress: currentPeerAddress,
+      peerAddressToSubscribe: targetPeerAddressState[0],
       lobbyId: lobbyIdState[0],
       tableId: tableIdState[0],
       peerId: parentPeerIdState[0],
@@ -683,7 +736,8 @@ function LobbyScreen() {
 
   const openWaitingTable = (request, peerId) => {
     openTableTab({
-      peerAddress: peerAddressState[0],
+      peerAddress: currentPeerAddress,
+      peerAddressToSubscribe: request.peerAddress,
       lobbyId: request.lobbyId,
       tableId: request.tableId,
       peerId,
@@ -693,33 +747,35 @@ function LobbyScreen() {
   return (
     <>
       <Logo />
-      <PeerSelectionDialog
-        open={peerDialogOpenState[0]}
-        peerAddress={peerAddressState[0]}
-        onConfirm={confirmPeer}
-      />
+      <nav>
+        <a href={window.location.pathname}>Choose Peer</a>
+      </nav>
       <section>
-        <h2>Lobby</h2>
+        <h2>Lobby · {TestPeers.label(currentPeerAddress)}</h2>
         <div className="lobby-form">
-          <PeerAddressField
-            peerAddress={peerAddressState[0]}
-            onChoosePeer={() => peerDialogOpenState[1](true)}
-          />
+          <Field label="Current Peer" value={currentPeerAddress} readOnly onChange={() => {}} />
           <Field label="Lobby" value={lobbyIdState[0]} onChange={lobbyIdState[1]} />
-          <div className="join-row">
-            <button type="button" onClick={joinTable}>Join Table</button>
-            <Field label="Table" value={tableIdState[0]} onChange={tableIdState[1]} />
-          </div>
+          <Field label="Table" value={tableIdState[0]} onChange={tableIdState[1]} />
+          <TargetPeerSelector
+            currentPeerAddress={currentPeerAddress}
+            peerAddress={targetPeerAddressState[0]}
+            onChange={targetPeerAddressState[1]}
+          />
+          <button
+            type="button"
+            disabled={TestPeers.isSame(targetPeerAddressState[0], currentPeerAddress)}
+            onClick={joinTable}
+          >
+            Join Table
+          </button>
         </div>
       </section>
-      {peerSelectedState[0] && (
-        <LobbyBackgroundKeeper
-          peerAddress={peerAddressState[0]}
-          lobbyId={lobbyIdState[0]}
-          onPeerId={parentPeerIdState[1]}
-          onAcceptWaiting={openWaitingTable}
-        />
-      )}
+      <LobbyBackgroundKeeper
+        peerAddress={currentPeerAddress}
+        lobbyId={lobbyIdState[0]}
+        onPeerId={parentPeerIdState[1]}
+        onAcceptWaiting={openWaitingTable}
+      />
     </>
   );
 }
@@ -814,7 +870,8 @@ function TableNetworkPanel(props) {
 function TableScreen() {
   const url = new TestUrl(window.location);
   const peerAddress = url.peerAddress();
-  const peerAddressToSubscribe = TestPeers.otherPeerAddress(peerAddress);
+  const peerAddressToSubscribe = url.peerAddressToSubscribe()
+    ?? TestPeers.otherPeerAddress(peerAddress);
 
   return (
     <>
@@ -837,6 +894,7 @@ function TableScreen() {
 
 function App() {
   const url = new TestUrl(window.location);
+  if (url.screen() === TestScreens.start) return <StartScreen />;
   if (url.screen() === TestScreens.table) return <TableScreen />;
   return <LobbyScreen />;
 }
