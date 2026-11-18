@@ -9,6 +9,7 @@ import {
   VirtualNetworkEventType,
   VirtualNetworkLogFormatter,
 } from 'privatepoker-p2p';
+import { InternalMessageSummary } from './InternalMessageSummary.js';
 import './style.css';
 
 class TestPeers {
@@ -309,7 +310,7 @@ class ConsoleLogRecord {
   }
 
   summary() {
-    return `${this.label} ${JsonValueFormatter.format(this.event)}`.trim();
+    return InternalMessageSummary.text(this.label, this.event);
   }
 
   details() {
